@@ -1,0 +1,199 @@
+---
+title: "Machine Learning for Epi: Assignment 6"
+output:
+  html_document: default
+  word_document: default
+date: "2023-02-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = F,
+                      message = F)
+
+library(tidyverse)
+library(caret)
+library(rpart)
+library(caret)
+library(rpart.plot)
+library(pROC)
+library(NHANES)
+library(e1071)
+```
+
+## Description of Data
+
+The data we will be using are from the online survey related to .... These data were collected as part of an online survey related to ... . *We will be using this dataset to try to identify the most important behavioral predictors of alcohol consumption.* We have restricted the dataset to 7 features and an outcome which distinguishes those who reported current alcohol use (defined as alcohol use in the past month or more frequently) vs no current use. 
+
+### Step 1: Load data and prepare for analysis
+
+The code chunk below loads the NHANES data, omits missing observations, and converts the variables Race1, Education, HHIncome, Diabetes, PhysActive, and Smoke100 to factor variables. 
+
+```{r load_data}
+data("NHANES")
+
+NHANES_df = NHANES %>% 
+  dplyr::select(Age, Race1, Education, HHIncome, Weight, Height, Pulse, Diabetes, BMI, PhysActive, Smoke100) %>% 
+  mutate(Race1 = as.factor(Race1), 
+         Education = as.factor(Education),
+         HHIncome = as.factor(HHIncome), 
+         Diabetes = as.factor(Diabetes), 
+         PhysActive = as.factor(PhysActive), 
+         Smoke100 = as.factor(Smoke100)) %>% 
+  drop_na()
+
+summary(NHANES_df) 
+```
+
+Our resulting variables include 11 demographic and health features, and our binary outcome variable, `Diabetes`. Based on the summary, we can see that the distribution of diabetes is . Therefore, will skip the centering and scaling steps in pre-processing.
+
+### Step 2: Partition the data 
+
+The code chunk below partitions the data into training and testing sets, using a 70/30 split. 
+
+```{r partition_data}
+set.seed(123)
+
+#Creating balanced partitions in the data
+train_index = createDataPartition(NHANES_df$Diabetes, p = 0.7, list = FALSE)
+
+NHANES_train = NHANES_df[train_index,]
+NHANES_test = NHANES_df[-train_index,]
+
+#Check distribution of the outcome between train and test data
+summary(NHANES_train$Diabetes) 
+summary(NHANES_test$Diabetes)
+```
+
+We can see that there are similar distributions of the variable `alc_consumption`, with approximately 10% of cases of alcohol use across both the training and testing sets, indicating that the data were successfully partitioned.
+
+### Step 3: Construct logistic regression models to predict healthy days
+
+We will fit 3 prediction models to predict current alcohol consumption. (feature name: `Diabetes`).
+
+- Model 1 (`class_tree`): Classification Tree
+
+- Model 2 (`mod_svc`): Support Vector Classifier (i.e. Support Vector Machine with a linear classifier)
+
+- Model 3 (`mod_log`): A logistic model based on all features.
+
+#### Classification Tree
+
+To fit the classification tree, we will train using 10-fold cross-validation, and set the tune length to ... combinations of ... to train on.
+
+```{r classtree}
+set.seed(123)
+
+#Creating 10-fold cross-validation and using down-sampling because of imbalance in data
+train.control.class = trainControl(method = "cv", number = 10, sampling = "down")
+
+#Create sequence of cp parameters to try 
+grid.2 = expand.grid(cp = seq(0.001, 0.3, by=0.01))
+
+#Train model
+class_tree = train(Diabetes ~ ., data = NHANES_train, method = "rpart", trControl = train.control.class, tuneGrid = grid.2)
+class_tree$bestTune
+
+class_tree
+
+rpart.plot(class_tree$finalModel)
+
+#Note you can obtain variable importance on the final model within training data
+varImp(class_tree)
+
+#Note you can get accuracy metric and confusion matrix from training.
+confusionMatrix(class_tree)
+
+# Get results
+class_perf = class_tree$results %>% arrange(desc(Accuracy)) %>% slice(1) %>% 
+    rename(C = "cp")
+```
+
+The resulting model found an optimal alpha of 0.4364 and lambda of 0.3853. We can see that the features selected to be included in the model are Impulsivity and Sensation-Seeking Behaviors.
+
+
+#### SVC Model
+
+To fit the elastic net model, we will train using 10-fold cross-validation, and fix alpha to 1. We then create a search grid of varying ... values to search for the optimal value. 
+
+```{r mod_svc}
+set.seed(123)
+
+#Set 10-fold cross-validation. Note if you want predicted probabilities, you need to set class Probs=True
+train_control = trainControl(method = "cv", number = 10, classProbs = T)
+
+#Train model. Note we are scaling data
+mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear", trControl = train_control, preProcess = c("center", "scale"))
+mod_svc
+
+#Incorporate different values for cost (C)
+mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear",  trControl = train_control, preProcess = c("center", "scale"), tuneGrid = expand.grid(C = seq(0.001, 2, length = 30)))
+
+#Visualize accuracy versus values of C
+plot(mod_svc)
+
+#Obtain metrics of accuracy from training
+confusionMatrix(mod_svc)
+
+#See information about final model
+mod_svc$finalModel
+
+# Get results
+svc_perf = mod_svc$results %>% arrange(desc(Accuracy)) %>% slice(1) 
+```
+
+The resulting model found an optimal lambda of 0.231. We can see that there was only 1 feature, Impulsivity, that was selected to be in the model.
+
+
+#### Logistic Regression Model
+
+To fit the logisic model, we will train the model within caret on the training dataset.
+
+```{r mod_logistic}
+mod_log = train(Diabetes ~ ., data = NHANES_train, method = "glm")
+mod_log
+
+log_perf = mod_log$results %>% arrange(desc(Accuracy)) %>% slice(1) %>% 
+  rename(C = "parameter") %>% 
+  mutate(C = as.numeric(C))
+```
+
+The resulting model includes all features to be fed into the model, with Impulsivity and Sensation-Seeking Behaviors having the largest effect size as indicated by the magnitude of their coefficients.
+
+#### Comparing performance across models
+
+Finally, let's compare the performance of the 3 models.
+
+```{r compare}
+rbind(class_perf, log_perf, svc_perf) %>% 
+  mutate(Model = c("Classification Tree", "Logistic Regression", "SVC")) %>% 
+  relocate(Model) %>% 
+  arrange(desc(Accuracy)) %>% 
+  knitr::kable(digits = 4)
+```
+
+The table shows that the Elastic Net has the best model performance as measured by accuracy (86.22%), followed narrowly by the LASSO model (86.14%), then the baseline model (80..45%). If I was interested in making sure I maximize accuracy, I would go with the Elastic Net model, and would select this model to classify current alcohol consumption.
+
+### Step 4: Final Model Evaluation
+
+Finally, we will evaluate the performance our final Elastic Net model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of accuracy, kappa, sensitivity, specificity, and precision (PPV) for the model.
+
+```{r test_EN}
+## ELASTIC MODEL
+# Make predictions in test set
+en_pred = mod_elastic %>% predict(alc_test)
+alc_test = alc_test %>% mutate(en_pred = as.factor(en_pred))
+
+# Model prediction performance
+cm_EN = confusionMatrix(data = alc_test$en_pred, reference = alc_test$alc_consumption, positive = "CurrentUse")
+
+cbind(cm_EN$overall %>% as_tibble_row(), cm_EN$byClass %>% as_tibble_row()) %>% 
+  dplyr::select(Accuracy, Kappa, Sensitivity, Specificity, Precision) %>% 
+  knitr::kable()
+```
+
+On the testing set, we can see that the accuracy of the Elastic Net model has diminished by ~3% to 83.19%, which is what we may expect when applying this model on new data. Moreover, we can see the sensitivity of the model is 100%, with lower specificity of 64%. This indicates that the model is good at detecting all potential cases of current alcohol consumption, but may be less useful for distinguishing patients without current alcohol consumption (resulting in more false positives).
+
+### Research Applications
+
+This analysis could directly address the research question of which behavioral features best predict current alcohol consumption, and therefore narrow down the list of behavioral tests clinicians may need to administer to patients in order to carry out this predictive task. One such application could be applying this predictive model to patients' electronic health records to predict current alcohol consumption among patients on the basis of behavioral test scores. Of course, this comes with several ethical concerns, such as considering the harms enacted on patients, notably if the model we selected above has a  tendency to report false positives in detecting current alcohol consumption.
