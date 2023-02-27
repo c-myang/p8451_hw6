@@ -9,7 +9,8 @@ date: "2023-02-28"
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, 
                       warning = F,
-                      message = F)
+                      message = F,
+                      fig.dim = c(12, 7))
 
 library(tidyverse)
 library(caret)
@@ -22,7 +23,7 @@ library(e1071)
 
 ## Description of Data
 
-The data we will be using are from the from the 2009-2012 National Health and Nutrition Examination Survey (NHANES), accessed through the `NHANES` package in R. *We will be using this dataset to try to predict diabetes and pre-diabetes.* We have restricted the dataset to 11 features and an outcome which distinguishes those who report diabetes status (defined as study participant told by a doctor or health professional that they have diabetes).
+The data we will be using are from the from the 2009-2012 National Health and Nutrition Examination Survey (NHANES), accessed through the `NHANES` package in R. *We will be using this dataset to try to predict diabetes.* We have restricted the dataset to 11 features and an outcome which distinguishes those who report diabetes status (defined as study participant told by a doctor or health professional that they have diabetes).
 
 ### Step 1: Load data and prepare for analysis
 
@@ -44,7 +45,7 @@ NHANES_df = NHANES %>%
 summary(NHANES_df)
 ```
 
-Our resulting variables include 11 demographic and health features, and our binary outcome variable, `Diabetes`. Based on the summary, we can see that the distribution of diabetes is quite unbalanced, with a 10.37% prevalence of the outcome. 
+Our resulting dataset contains 6356 observations of 11 features, 10 of which are demographic and health features, and 1 containing our binary outcome variable, `Diabetes`. Based on the summary, we can see that the distribution of diabetes is quite unbalanced, with a 10.37% prevalence of cases. 
 
 ### Step 2: Partition the data 
 
@@ -64,19 +65,19 @@ summary(NHANES_train$Diabetes)
 summary(NHANES_test$Diabetes)
 ```
 
-We can see that there are similar distributions of the variable `diabetes`, with approximately 10% of observations having diabetes across both the training and testing sets, indicating that the data were successfully partitioned.
+We can see that there are similar distributions of the variable `Diabetes`, with approximately 10% of observations having diabetes across both the training and testing sets, indicating that the data were successfully partitioned.
 
 ### Step 3: Construct logistic regression models to predict healthy days
 
 We will fit 3 prediction models to predict diabetes status. (feature name: `Diabetes`). 
 
-- Model 1 (`class_tree`): Classification Tree
+- Model 1 (`class_tree`): Classification Tree based on all features.
 
-- Model 2 (`mod_svc`): Support Vector Classifier (i.e. Support Vector Machine with a linear classifier)
+- Model 2 (`mod_svc`): Support Vector Classifier (i.e. Support Vector Machine with a linear classifier) based on all features.
 
-- Model 3 (`mod_log`): A logistic model based on all features.
+- Model 3 (`mod_log`): A logistic model based on all features that will serve as our baseline model.
 
-The models will be trained and selected based on the highest the Area Under the ROC rather than accuracy, because we want to balance the sensitivity and specificity of diabetes classification. This will be done using `summaryFunction = twoClassSummary` and `metric = "ROC"` options within `trainControl()` and `train()` in caret.
+The models will be trained and selected based on the highest Area Under the ROC (AUROC) rather than accuracy, because we want to balance the sensitivity and specificity of diabetes classification. This will be done using `summaryFunction = twoClassSummary` and `metric = "ROC"` options within `trainControl()` and `train()` in caret, respectively.
 
 #### Classification Tree
 
@@ -105,15 +106,16 @@ varImp(class_tree)
 rpart.plot(class_tree$finalModel)
 
 # Save results
-class_perf = class_tree$results %>% arrange(desc(ROC)) %>% slice(1) %>% 
-    rename(C = "cp")
+class_perf = class_tree$results %>% arrange(desc(ROC)) %>% 
+  slice(1) %>% 
+  rename(Hyperparameter = "cp")
 ```
 
-The resulting model found that for the most optimal AUROC of 78.91%, there is a relatively small complexity parameter Cp of 0.001, which suggests that increasing the size and complexity of the tree yields better model performance. We can see that the most important variables in the classification tree in order of importance are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. 
+The resulting model found that for the most optimal AUROC of 78.91%, there is a relatively small complexity parameter Cp of 0.001, which suggests that increasing the size and complexity of the tree yields better model performance. We can see that the most important variables in the classification tree in descending order of importance include Age, BMI, and Weight, and as such these are the features that are split near the top of the tree, while lower-importance variables are split near the bottom of the tree.
 
 #### SVC Model
 
-To fit the SVC model, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 2 of a length 30 values. We will also use down-sampling because of a 90/10 imbalance of the outcome variable, Diabetes, in the data.
+To fit the SVC model, we will train using 10-fold cross-validation, and set the tune grid of length 30 of values ranging from 0.001 to 2. We will also use down-sampling because of a 90/10 imbalance of the outcome variable, Diabetes, in the data.
 
 ```{r mod_svc}
 set.seed(123)
@@ -134,11 +136,12 @@ mod_svc$results %>% arrange(desc(ROC)) %>% head() %>% knitr::kable()
 plot(mod_svc)
 
 # Save results
-svc_perf = mod_svc$results %>% arrange(desc(ROC)) %>% slice(1) 
+svc_perf = mod_svc$results %>% arrange(desc(ROC)) %>% 
+  slice(1) %>%
+  rename(Hyperparameter = "C")
 ```
 
-For the most optimal AUROC of 81.63%, the the trained SVC model found a hyperparameter of 1.035, allowing a moderate threshold of misclassification between classes. As confirmed by the plot, other values of C from 0.001 to 2 did not optimize the ROC. 
-
+For the most optimal AUROC of 81.63%, the the trained SVC model found a hyperparameter (C) of 1.035, allowing a moderate threshold of misclassification between classes. As confirmed by the plot, other values of C from 0.001 to 2 did not optimize the ROC. 
 
 #### Logistic Regression Model
 
@@ -150,26 +153,25 @@ train_control_log = trainControl(summaryFunction = twoClassSummary, classProbs =
 
 mod_log = train(Diabetes ~ ., data = NHANES_train, method = "glm", trControl = train_control_log, metric = "ROC")
 
+# View results from training 
 mod_log$results %>% knitr::kable()
 
 # Save model results
 log_perf = mod_log$results %>% arrange(desc(ROC)) %>% slice(1) %>% 
-  rename(C = "parameter") %>% 
-  mutate(C = as.numeric(C))
-
+  rename(Hyperparameter = "parameter") %>% 
+  mutate(Hyperparameter = as.numeric(Hyperparameter))
 ```
 
 The resulting model yielded an AUROC of 80.73%, with a very high sensitivity of 98.5% but a very low specificity of 8.24%.
 
 #### Comparing performance across models
 
-Finally, let's compare the performance results across the 3 models.
+Finally, let's compare the performance results on the training data across the 3 models.
 
 ```{r compare}
 rbind(class_perf, log_perf, svc_perf) %>% 
   mutate(Model = c("Classification Tree", "Logistic Regression", "SVC")) %>% 
   relocate(Model) %>% 
-  rename(Hyperparameter = C) %>% 
   arrange(desc(ROC)) %>% 
   knitr::kable(digits = 4)
 ```
@@ -178,7 +180,7 @@ The table shows that the SVC model has the best performance as measured by AUROC
 
 ### Step 4: Final Model Evaluation
 
-Finally, we will evaluate the performance our final SVC model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of sensitivity, specificity for the model, and plot the ROC curve.
+Finally, we will evaluate the performance our final SVC model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of sensitivity, specificity, NPV, and PPV, and accuracy for the model, and plot the ROC curve.
 
 ```{r test}
 # Make predictions in test set
@@ -187,7 +189,7 @@ NHANES_test = NHANES_test %>% mutate(pred = as.factor(pred))
 
 # Get evaluation metrics from test set
 cm = confusionMatrix(data = NHANES_test$pred, reference = NHANES_test$Diabetes, positive = "Yes")
-cm
+
 
 #Create ROC Curve for Analysis
 pred_prob <- predict(mod_svc, NHANES_test, type = "prob")
@@ -195,15 +197,17 @@ pred_prob <- predict(mod_svc, NHANES_test, type = "prob")
 # Plot Area under the Receiver Operating Curve (AUROC)
 analysis =  roc(response = NHANES_test$Diabetes, predictor = pred_prob[,2])
 
-plot(1 - analysis$specificities, analysis$sensitivities,type = "l",
-ylab = "Sensitivity",xlab = "1-Specificity", col = "black",lwd = 2,
+# View results
+cm
+analysis$auc
+
+plot(1 - analysis$specificities, analysis$sensitivities, type = "l",
+ylab = "Sensitivity",xlab = "1-Specificity", col = "black", lwd = 2,
 main = "ROC Curve for Diabetes Classification")
 abline(a = 0, b = 1)
-
 ```
 
-On the testing set, we can see that the accuracy of the SVC model is 72.56%, sensitivity is 81.73%, and specificity is 71.5%. Moreover, we see a large imbalance between the PPV (24.85%) and NPV (97.14%), which may be affected due to low prevalence (10.34%) of diabetes cases in the data such that there is a much higher probability of truly detecting persons without diabetes.
-
+On the testing set, we can see that the AUROC of our final model is 82.35%, with accuracy of 72.56%, sensitivity of 81.73%, and specificity of 71.5%. Moreover, we see a large imbalance between the PPV (24.85%) and NPV (97.14%), which may be affected due to low prevalence (10.34%) of diabetes cases in the data such that there is a much higher probability of truly detecting persons without diabetes.
 
 ### SVC Model Limitations
 
