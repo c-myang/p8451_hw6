@@ -26,7 +26,7 @@ The data we will be using are from the from the 2009-2012 National Health and Nu
 
 ### Step 1: Load data and prepare for analysis
 
-The code chunk below loads the NHANES data, omits missing observations, and converts the variables Race1, Education, HHIncome, Diabetes, PhysActive, and Smoke100 to factor variables. 
+The code chunk below loads the NHANES data, omits missing observations, and converts the variables Race1, Education, HHIncome, Diabetes, PhysActive, and Smoke100 to factor variables. Although Classification Trees can handle missing data, SVC models cannot, and therefore we will omit missing variables to be able to compare model performance on the same subset of training data.
 
 ```{r load_data}
 data("NHANES")
@@ -64,11 +64,11 @@ summary(NHANES_train$Diabetes)
 summary(NHANES_test$Diabetes)
 ```
 
-We can see that there are similar distributions of the variable `diabetes`, with approximately 10% prevalence of cases of diabetes across both the training and testing sets, indicating that the data were successfully partitioned.
+We can see that there are similar distributions of the variable `diabetes`, with approximately 10% of observations having diabetes across both the training and testing sets, indicating that the data were successfully partitioned.
 
 ### Step 3: Construct logistic regression models to predict healthy days
 
-We will fit 3 prediction models to predict diabetes status. (feature name: `Diabetes`).
+We will fit 3 prediction models to predict diabetes status. (feature name: `Diabetes`). 
 
 - Model 1 (`class_tree`): Classification Tree
 
@@ -76,121 +76,138 @@ We will fit 3 prediction models to predict diabetes status. (feature name: `Diab
 
 - Model 3 (`mod_log`): A logistic model based on all features.
 
+The models will be trained and selected based on the highest the Area Under the ROC rather than accuracy, because we want to balance the sensitivity and specificity of diabetes classification. This will be done using `summaryFunction = twoClassSummary` and `metric = "ROC"` options within `trainControl()` and `train()` in caret.
+
 #### Classification Tree
 
-To fit the classification tree, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 0.3, searching in increments of 0.01.
+To fit the classification tree, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 0.3, searching in increments of 0.01. We will use down-sampling because of a 90/10 imbalance of the outcome variable, Diabetes, in the data.
 
 ```{r classtree}
 set.seed(123)
 
 #Creating 10-fold cross-validation and using down-sampling because of imbalance in data
-train.control.class = trainControl(method = "cv", number = 10, sampling = "down")
+train.control.class = trainControl(method = "cv", number = 10, sampling = "down",
+                                   summaryFunction = twoClassSummary, classProbs = TRUE)
 
 #Create sequence of cp parameters to try 
 grid.2 = expand.grid(cp = seq(0.001, 0.3, by = 0.01))
 
 #Train model
-class_tree = train(Diabetes ~ ., data = NHANES_train, method = "rpart", trControl = train.control.class, tuneGrid = grid.2)
-class_tree$bestTune
+class_tree = train(Diabetes ~ ., data = NHANES_train, method = "rpart", trControl = train.control.class, tuneGrid = grid.2, metric = "ROC")
 
-class_tree
+# View results
+class_tree$results %>% head() %>% knitr::kable()
 
-rpart.plot(class_tree$finalModel)
-
-#Note you can obtain variable importance on the final model within training data
+# Obtain variable importance on the final model within training data
 varImp(class_tree)
 
-#Note you can get accuracy metric and confusion matrix from training.
-confusionMatrix(class_tree)
+# Plot classification tree
+rpart.plot(class_tree$finalModel)
 
-# Get results
-class_perf = class_tree$results %>% arrange(desc(Accuracy)) %>% slice(1) %>% 
+# Save results
+class_perf = class_tree$results %>% arrange(desc(ROC)) %>% slice(1) %>% 
     rename(C = "cp")
 ```
 
-The resulting model found a relatively small complexity parameter Cp of 0.001. We can see that the most important variables in the classification tree, respectively are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. The confusion matrix indicates that across 10 cross-validated folds of the data, the model has a classification accuracy of 70.45%.
+The resulting model found that for the most optimal AUROC of 78.91%, there is a relatively small complexity parameter Cp of 0.001, which suggests that increasing the size and complexity of the tree yields better model performance. We can see that the most important variables in the classification tree in order of importance are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. 
 
 #### SVC Model
 
-To fit the SVC model, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 2 of a length 30 values.
+To fit the SVC model, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 2 of a length 30 values. We will also use down-sampling because of a 90/10 imbalance of the outcome variable, Diabetes, in the data.
 
 ```{r mod_svc}
 set.seed(123)
 
 #Set 10-fold cross-validation and downsample
-train_control = trainControl(method = "cv", number = 10, sampling = "down", classProbs = T)
+train_control = trainControl(method = "cv", number = 10, sampling = "down", classProbs = T, summaryFunction = twoClassSummary)
 
 #Incorporate different values for cost (C)
-mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear",  trControl = train_control, preProcess = c("center", "scale"), tuneGrid = expand.grid(C = seq(0.001, 2, length = 30)))
+mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear",  trControl = train_control, 
+                preProcess = c("center", "scale"), 
+                tuneGrid = expand.grid(C = seq(0.001, 2, length = 30)), 
+                metric = "ROC")
 
-mod_svc$bestTune
+# View results from training 
+mod_svc$results %>% arrange(desc(ROC)) %>% head() %>% knitr::kable()
 
 #Visualize accuracy versus values of C
 plot(mod_svc)
 
-#Obtain metrics of accuracy from training
-confusionMatrix(mod_svc)
-
-#See information about final model
-mod_svc$finalModel
-# Get results
-svc_perf = mod_svc$results %>% arrange(desc(Accuracy)) %>% slice(1) 
+# Save results
+svc_perf = mod_svc$results %>% arrange(desc(ROC)) %>% slice(1) 
 ```
 
-The resulting model found a relatively smallparameter C of 0.001. We can see that the most important variables in the classification tree, respectively are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. The confusion matrix indicates that across 10 cross-validated folds of the data, the model has a classification accuracy of 70.45%.
+For the most optimal AUROC of 81.63%, the the trained SVC model found a hyperparameter of 1.035, allowing a moderate threshold of misclassification between classes. As confirmed by the plot, other values of C from 0.001 to 2 did not optimize the ROC. 
 
 
 #### Logistic Regression Model
 
-To fit the logisic model, we will train the model within caret on the training dataset.
+To fit the logistic model, we will feed all features into the model, and train within caret on the training dataset.
 
 ```{r mod_logistic}
 set.seed(123)
+train_control_log = trainControl(summaryFunction = twoClassSummary, classProbs = TRUE)
 
-mod_log = train(Diabetes ~ ., data = NHANES_train, method = "glm")
-mod_log
+mod_log = train(Diabetes ~ ., data = NHANES_train, method = "glm", trControl = train_control_log, metric = "ROC")
 
-log_perf = mod_log$results %>% arrange(desc(Accuracy)) %>% slice(1) %>% 
+mod_log$results %>% knitr::kable()
+
+# Save model results
+log_perf = mod_log$results %>% arrange(desc(ROC)) %>% slice(1) %>% 
   rename(C = "parameter") %>% 
   mutate(C = as.numeric(C))
+
 ```
 
-The resulting model includes all features to be fed into the model, with Impulsivity and Sensation-Seeking Behaviors having the largest effect size as indicated by the magnitude of their coefficients.
+The resulting model yielded an AUROC of 80.73%, with a very high sensitivity of 98.5% but a very low specificity of 8.24%.
 
 #### Comparing performance across models
 
-Finally, let's compare the performance of the 3 models.
+Finally, let's compare the performance results across the 3 models.
 
 ```{r compare}
 rbind(class_perf, log_perf, svc_perf) %>% 
   mutate(Model = c("Classification Tree", "Logistic Regression", "SVC")) %>% 
   relocate(Model) %>% 
   rename(Hyperparameter = C) %>% 
-  arrange(desc(Accuracy)) %>% 
+  arrange(desc(ROC)) %>% 
   knitr::kable(digits = 4)
 ```
 
-The table shows that the baseline Logistic Regression Model has the best model performance as measured by accuracy (89.28%%), followed narrowly by the SVC model (72.45%), then the Classification Tree (70.22%). If I was interested in making sure I maximize accuracy, I would go with the Logistic Regression model, and would select this model to classify diabetes status.
+The table shows that the SVC model has the best performance as measured by AUROC (81.64%%), followed by the baseline logistic regression model (80.73%), then the Classification Tree (78.91%). We can see that for the SVC, there is better balance of sensitivity (71.76%) and specificity (77.9%), and while the baseline model has the second highest AUROC, there is a very large imbalance of sensitivity (98.49%) and specificity (8.24%). Therefore, I would choose the SVC as my final model to optimally classify diabetes without an overwhelming imbalance of false positives that would be introduced if I chose the baseline model.
 
 ### Step 4: Final Model Evaluation
 
-Finally, we will evaluate the performance our final Elastic Net model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of accuracy, kappa, sensitivity, specificity, and precision (PPV) for the model.
+Finally, we will evaluate the performance our final SVC model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of sensitivity, specificity for the model, and plot the ROC curve.
 
-```{r test_EN}
+```{r test}
 # Make predictions in test set
-pred = mod_log %>% predict(NHANES_test)
+pred = mod_svc %>% predict(NHANES_test)
 NHANES_test = NHANES_test %>% mutate(pred = as.factor(pred))
 
-# Model prediction performance
+# Get evaluation metrics from test set
 cm = confusionMatrix(data = NHANES_test$pred, reference = NHANES_test$Diabetes, positive = "Yes")
+cm
 
-cbind(cm$overall %>% as_tibble_row(), cm$byClass %>% as_tibble_row()) %>% 
-  dplyr::select(Accuracy, Kappa, Sensitivity, Specificity, Precision) %>% 
-  knitr::kable()
+#Create ROC Curve for Analysis
+pred_prob <- predict(mod_svc, NHANES_test, type = "prob")
+
+# Plot Area under the Receiver Operating Curve (AUROC)
+analysis =  roc(response = NHANES_test$Diabetes, predictor = pred_prob[,2])
+
+plot(1 - analysis$specificities, analysis$sensitivities,type = "l",
+ylab = "Sensitivity",xlab = "1-Specificity", col = "black",lwd = 2,
+main = "ROC Curve for Diabetes Classification")
+abline(a = 0, b = 1)
+
 ```
 
-On the testing set, we can see that the accuracy of the Logistic Regression model is 89.56%. Moreover, we can see the sensitivity of the model is ...%, with a specificity of ...%. This indicates that the model is ..., but ....
+On the testing set, we can see that the accuracy of the SVC model is 72.56%, sensitivity is 81.73%, and specificity is 71.5%. Moreover, we see a large imbalance between the PPV (24.85%) and NPV (97.14%), which may be affected due to low prevalence (10.34%) of diabetes cases in the data such that there is a much higher probability of truly detecting persons without diabetes.
 
-### Research Applications
 
-This analysis could directly address the research question of which behavioral features best predict current alcohol consumption, and therefore narrow down the list of behavioral tests clinicians may need to administer to patients in order to carry out this predictive task. One such application could be applying this predictive model to patients' electronic health records to predict current alcohol consumption among patients on the basis of behavioral test scores. Of course, this comes with several ethical concerns, such as considering the harms enacted on patients, notably if the model we selected above has a  tendency to report false positives in detecting current alcohol consumption.
+### SVC Model Limitations
+
+One main consideration that arose was the imbalance of cases and controls in the NHANES data that we used to train the model on, where there were a disproportionate number of cases without diabetes compared to those with diabetes. With imbalanced data, information required to make an accurate prediction about the minority class is limited, and therefore when applied to new data, the model may not perform well when trying to predict new cases of diabetes. Although we dealt with this issue by downsampling while training our model, we saw a lower PPV, and this limitation is what we may expect when applying the algorithm on new data with a low prevalence of diabetes.
+
+Another limitation of the SVC model is that it does not inherently perform feature selection, and therefore may result in limited prediction performance and overfitting on new datasets because of irrelevant features that were included in the model when training on the original data. As such, there can be limitations when applying this model on large datasets or high-dimensional feature spaces. Moreover, depending on what types of applications the SVC model is used for, there are also limitations to the model's interpretability.
+
