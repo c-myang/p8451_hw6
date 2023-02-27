@@ -14,7 +14,6 @@ knitr::opts_chunk$set(echo = TRUE,
 library(tidyverse)
 library(caret)
 library(rpart)
-library(caret)
 library(rpart.plot)
 library(pROC)
 library(NHANES)
@@ -23,7 +22,7 @@ library(e1071)
 
 ## Description of Data
 
-The data we will be using are from the online survey related to .... These data were collected as part of an online survey related to ... . *We will be using this dataset to try to identify the most important behavioral predictors of alcohol consumption.* We have restricted the dataset to 7 features and an outcome which distinguishes those who reported current alcohol use (defined as alcohol use in the past month or more frequently) vs no current use. 
+The data we will be using are from the from the 2009-2012 National Health and Nutrition Examination Survey (NHANES), accessed through the `NHANES` package in R. *We will be using this dataset to try to predict diabetes and pre-diabetes.* We have restricted the dataset to 11 features and an outcome which distinguishes those who report diabetes status (defined as study participant told by a doctor or health professional that they have diabetes).
 
 ### Step 1: Load data and prepare for analysis
 
@@ -42,10 +41,10 @@ NHANES_df = NHANES %>%
          Smoke100 = as.factor(Smoke100)) %>% 
   drop_na()
 
-summary(NHANES_df) 
+summary(NHANES_df)
 ```
 
-Our resulting variables include 11 demographic and health features, and our binary outcome variable, `Diabetes`. Based on the summary, we can see that the distribution of diabetes is . Therefore, will skip the centering and scaling steps in pre-processing.
+Our resulting variables include 11 demographic and health features, and our binary outcome variable, `Diabetes`. Based on the summary, we can see that the distribution of diabetes is quite unbalanced, with a 10.37% prevalence of the outcome. 
 
 ### Step 2: Partition the data 
 
@@ -65,11 +64,11 @@ summary(NHANES_train$Diabetes)
 summary(NHANES_test$Diabetes)
 ```
 
-We can see that there are similar distributions of the variable `alc_consumption`, with approximately 10% of cases of alcohol use across both the training and testing sets, indicating that the data were successfully partitioned.
+We can see that there are similar distributions of the variable `diabetes`, with approximately 10% prevalence of cases of diabetes across both the training and testing sets, indicating that the data were successfully partitioned.
 
 ### Step 3: Construct logistic regression models to predict healthy days
 
-We will fit 3 prediction models to predict current alcohol consumption. (feature name: `Diabetes`).
+We will fit 3 prediction models to predict diabetes status. (feature name: `Diabetes`).
 
 - Model 1 (`class_tree`): Classification Tree
 
@@ -79,7 +78,7 @@ We will fit 3 prediction models to predict current alcohol consumption. (feature
 
 #### Classification Tree
 
-To fit the classification tree, we will train using 10-fold cross-validation, and set the tune length to ... combinations of ... to train on.
+To fit the classification tree, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 0.3, searching in increments of 0.01.
 
 ```{r classtree}
 set.seed(123)
@@ -88,7 +87,7 @@ set.seed(123)
 train.control.class = trainControl(method = "cv", number = 10, sampling = "down")
 
 #Create sequence of cp parameters to try 
-grid.2 = expand.grid(cp = seq(0.001, 0.3, by=0.01))
+grid.2 = expand.grid(cp = seq(0.001, 0.3, by = 0.01))
 
 #Train model
 class_tree = train(Diabetes ~ ., data = NHANES_train, method = "rpart", trControl = train.control.class, tuneGrid = grid.2)
@@ -109,25 +108,22 @@ class_perf = class_tree$results %>% arrange(desc(Accuracy)) %>% slice(1) %>%
     rename(C = "cp")
 ```
 
-The resulting model found an optimal alpha of 0.4364 and lambda of 0.3853. We can see that the features selected to be included in the model are Impulsivity and Sensation-Seeking Behaviors.
-
+The resulting model found a relatively small complexity parameter Cp of 0.001. We can see that the most important variables in the classification tree, respectively are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. The confusion matrix indicates that across 10 cross-validated folds of the data, the model has a classification accuracy of 70.45%.
 
 #### SVC Model
 
-To fit the elastic net model, we will train using 10-fold cross-validation, and fix alpha to 1. We then create a search grid of varying ... values to search for the optimal value. 
+To fit the SVC model, we will train using 10-fold cross-validation, and set the tune grid to values ranging from 0.001 to 2 of a length 30 values.
 
 ```{r mod_svc}
 set.seed(123)
 
-#Set 10-fold cross-validation. Note if you want predicted probabilities, you need to set class Probs=True
-train_control = trainControl(method = "cv", number = 10, classProbs = T)
-
-#Train model. Note we are scaling data
-mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear", trControl = train_control, preProcess = c("center", "scale"))
-mod_svc
+#Set 10-fold cross-validation and downsample
+train_control = trainControl(method = "cv", number = 10, sampling = "down", classProbs = T)
 
 #Incorporate different values for cost (C)
 mod_svc = train(Diabetes ~ ., data = NHANES_train, method = "svmLinear",  trControl = train_control, preProcess = c("center", "scale"), tuneGrid = expand.grid(C = seq(0.001, 2, length = 30)))
+
+mod_svc$bestTune
 
 #Visualize accuracy versus values of C
 plot(mod_svc)
@@ -137,12 +133,11 @@ confusionMatrix(mod_svc)
 
 #See information about final model
 mod_svc$finalModel
-
 # Get results
 svc_perf = mod_svc$results %>% arrange(desc(Accuracy)) %>% slice(1) 
 ```
 
-The resulting model found an optimal lambda of 0.231. We can see that there was only 1 feature, Impulsivity, that was selected to be in the model.
+The resulting model found a relatively smallparameter C of 0.001. We can see that the most important variables in the classification tree, respectively are Age, BMI, and Weight, and as such these are the features that are split near the top of the tree. The confusion matrix indicates that across 10 cross-validated folds of the data, the model has a classification accuracy of 70.45%.
 
 
 #### Logistic Regression Model
@@ -150,6 +145,8 @@ The resulting model found an optimal lambda of 0.231. We can see that there was 
 To fit the logisic model, we will train the model within caret on the training dataset.
 
 ```{r mod_logistic}
+set.seed(123)
+
 mod_log = train(Diabetes ~ ., data = NHANES_train, method = "glm")
 mod_log
 
@@ -168,31 +165,31 @@ Finally, let's compare the performance of the 3 models.
 rbind(class_perf, log_perf, svc_perf) %>% 
   mutate(Model = c("Classification Tree", "Logistic Regression", "SVC")) %>% 
   relocate(Model) %>% 
+  rename(Hyperparameter = C) %>% 
   arrange(desc(Accuracy)) %>% 
   knitr::kable(digits = 4)
 ```
 
-The table shows that the Elastic Net has the best model performance as measured by accuracy (86.22%), followed narrowly by the LASSO model (86.14%), then the baseline model (80..45%). If I was interested in making sure I maximize accuracy, I would go with the Elastic Net model, and would select this model to classify current alcohol consumption.
+The table shows that the baseline Logistic Regression Model has the best model performance as measured by accuracy (89.28%%), followed narrowly by the SVC model (72.45%), then the Classification Tree (70.22%). If I was interested in making sure I maximize accuracy, I would go with the Logistic Regression model, and would select this model to classify diabetes status.
 
 ### Step 4: Final Model Evaluation
 
 Finally, we will evaluate the performance our final Elastic Net model by making predictions in the test data. We will use the `confusionMatrix()` function to get performance measures of accuracy, kappa, sensitivity, specificity, and precision (PPV) for the model.
 
 ```{r test_EN}
-## ELASTIC MODEL
 # Make predictions in test set
-en_pred = mod_elastic %>% predict(alc_test)
-alc_test = alc_test %>% mutate(en_pred = as.factor(en_pred))
+pred = mod_log %>% predict(NHANES_test)
+NHANES_test = NHANES_test %>% mutate(pred = as.factor(pred))
 
 # Model prediction performance
-cm_EN = confusionMatrix(data = alc_test$en_pred, reference = alc_test$alc_consumption, positive = "CurrentUse")
+cm = confusionMatrix(data = NHANES_test$pred, reference = NHANES_test$Diabetes, positive = "Yes")
 
-cbind(cm_EN$overall %>% as_tibble_row(), cm_EN$byClass %>% as_tibble_row()) %>% 
+cbind(cm$overall %>% as_tibble_row(), cm$byClass %>% as_tibble_row()) %>% 
   dplyr::select(Accuracy, Kappa, Sensitivity, Specificity, Precision) %>% 
   knitr::kable()
 ```
 
-On the testing set, we can see that the accuracy of the Elastic Net model has diminished by ~3% to 83.19%, which is what we may expect when applying this model on new data. Moreover, we can see the sensitivity of the model is 100%, with lower specificity of 64%. This indicates that the model is good at detecting all potential cases of current alcohol consumption, but may be less useful for distinguishing patients without current alcohol consumption (resulting in more false positives).
+On the testing set, we can see that the accuracy of the Logistic Regression model is 89.56%. Moreover, we can see the sensitivity of the model is ...%, with a specificity of ...%. This indicates that the model is ..., but ....
 
 ### Research Applications
 
